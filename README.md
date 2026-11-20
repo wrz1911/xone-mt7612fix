@@ -315,3 +315,16 @@ modify it under the terms of the GNU General Public License
 as published by the Free Software Foundation; either version 2
 of the License, or (at your option) any later version.
 ```
+
+## Why this is not an MT7613-specific init
+
+The MT76 init sequence in xone is a kernel port of xow's MT7612 (mt76x2) sequence:
+
+- `xone_mt76_init_registers()` writes the same registers/values as xow `Mt76::initRegisters()`
+- `load_cr()` only sends `MT_CMD_LOAD_CR`; the CR data lives in firmware, there is no driver-side MT7613 table
+- `xone_dongle_02fe.bin` and `xow_dongle.bin` are byte-identical (`8cecc98764d7975d4b0babe7a3b19314`)
+- The `0x7613` value in the log is what the efuse/firmware reports, not a different init path
+
+The real difference is timing: the MT7612 in the 045e:02fe adapter needs more than 1 s for USB
+bulk transfers and more than 500 ms after the firmware USB reconnect. This fork therefore only
+relaxes those parameters; it does not replace the init sequence with an "MT7612"-specific one.
