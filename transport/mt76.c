@@ -13,7 +13,7 @@
 #include "mt76.h"
 
 /* bulk transfer timeout in ms */
-#define XONE_MT_USB_TIMEOUT 1000
+#define XONE_MT_USB_TIMEOUT 3000
 
 #define XONE_MT_POLL_RETRIES 50
 
@@ -528,7 +528,7 @@ int xone_mt76_load_firmware(struct xone_mt76 *mt, const struct firmware *fw)
 		 * by xone_mt76_init_radio(). Without this delay init_radio
 		 * reliably times out (-ETIMEDOUT) on warm reboot.
 		 */
-		msleep(500);
+		msleep(2000);
 		return 0;
 	}
 
@@ -569,7 +569,7 @@ int xone_mt76_load_firmware(struct xone_mt76 *mt, const struct firmware *fw)
 	 * Wait long enough for the disconnect/reconnect cycle to complete so
 	 * the poll reflects the true post-startup state of the device.
 	 */
-	msleep(500);
+	msleep(2000);
 
 	if (!xone_mt76_poll(mt, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG, 0x01, 0x01))
 		err = -ETIMEDOUT;

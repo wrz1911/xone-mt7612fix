@@ -1,3 +1,38 @@
+# xone-mt7612fix
+
+Fork of [dlundqvist/xone](https://github.com/dlundqvist/xone) with a fix for the **Xbox Wireless Adapter 045e:02fe (Model 1790, MT7612UN)** that fails with `init radio failed: -110`.
+
+## Problem
+
+On the 045e:02fe adapter the upstream driver writes the firmware successfully but then `xone_mt76_init_radio()` times out:
+
+```
+xone_dongle_fw_load: init radio timed out, retrying (1/3)
+xone_mt76_init_radio: id=0x7613
+xone_dongle_fw_load: init radio failed: -110
+```
+
+The MT7612 hardware needs more time than upstream allows: the USB bulk timeout is 1 s and the wait after the firmware USB reconnect is 500 ms.
+
+## Fix
+
+```
+transport/mt76.c:
+  XONE_MT_USB_TIMEOUT  1000 -> 3000
+  msleep(500) -> msleep(2000)   (reset_firmware / load_firmware)
+```
+
+With these two changes every `init_radio` step completes and the wireless controller connects through `xone_gip`.
+
+## Tested
+
+- Xbox Wireless Adapter `045e:02fe` (Model 1790, MT7612UN)
+- Xbox Series controller, wireless
+- Arch Linux, kernel 7.3.5-x64v3-xanmod-custom, DKMS build
+- `xone_dongle` + `xone_gip`; controller shows up as `/dev/input/jsN`
+
+---
+
 <p align="center">
     <img src="logo.svg" alt="Logo" width="200">
 </p>
