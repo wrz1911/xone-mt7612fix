@@ -1,0 +1,33 @@
+# Maintainer: wrz1911 <wrz1911@users.noreply.github.com>
+
+pkgname="xone-fix"
+pkgver=0.5.8.r2.g30317da
+pkgrel=1
+pkgdesc='xone with MT7612 (045e:02fe) init fix and XInput (ShanWan Q34U / Xbox 360) transport'
+url="https://github.com/wrz1911/xone-mt7612fix"
+license=('GPL-2.0-or-later')
+arch=('any')
+
+depends=(
+  'dkms'
+  'xone-dongle-firmware'
+)
+provides=('xone-dkms')
+conflicts=('xone-dkms' 'xone-dkms-git')
+
+_pkgname="xone"
+_src="xone-fix-$pkgver"
+source=("xone-fix-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  # set module version
+  find "$_src" -type f \( -name 'dkms.conf' -o -name '*.c' \) -exec sed -i "s/#VERSION#/$pkgver/" {} +
+
+  # copy DKMS source tree
+  mkdir -pm755 "$pkgdir/usr/src/$_pkgname-$pkgver"
+  cp -a "$_src"/* "$pkgdir/usr/src/$_pkgname-$pkgver/"
+
+  # blacklist xpad and mt76x2u, xone drives those devices
+  install -Dm644 "$_src/install/modprobe.conf" "$pkgdir/usr/lib/modprobe.d/xone-blacklist.conf"
+}

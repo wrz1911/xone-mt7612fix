@@ -328,3 +328,17 @@ The MT76 init sequence in xone is a kernel port of xow's MT7612 (mt76x2) sequenc
 The real difference is timing: the MT7612 in the 045e:02fe adapter needs more than 1 s for USB
 bulk transfers and more than 500 ms after the firmware USB reconnect. This fork therefore only
 relaxes those parameters; it does not replace the init sequence with an "MT7612"-specific one.
+
+## xone-fix DKMS package
+
+`packaging/PKGBUILD` builds the `xone-fix` DKMS package (replaces
+`xone-dkms-git`). It ships the MT7612 timeout fix and the XInput transport
+driver. Generate the source tarball from this tree first:
+
+```bash
+pkgver=0.5.8.r2.g30317da
+rsync -a --exclude=.git . "/tmp/xone-fix-$pkgver/"
+tar -C /tmp -czf "xone-fix-$pkgver.tar.gz" "xone-fix-$pkgver"
+```
+
+Then put the tarball next to `packaging/PKGBUILD` and run `makepkg -si`.
