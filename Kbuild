@@ -7,6 +7,7 @@ xone_gip_chatpad-y := driver/chatpad.o
 xone_gip_madcatz_strat-y := driver/madcatz_strat.o
 xone_gip_madcatz_glam-y := driver/madcatz_glam.o
 xone_gip_pdp_jaguar-y := driver/pdp_jaguar.o
+xone_xinput-y := transport/xinput.o
 
 obj-m := xone_gip.o \
 	xone_wired.o \
@@ -16,4 +17,5 @@ obj-m := xone_gip.o \
 	xone_gip_chatpad.o \
 	xone_gip_madcatz_strat.o \
 	xone_gip_madcatz_glam.o \
-	xone_gip_pdp_jaguar.o
+	xone_gip_pdp_jaguar.o \
+	xone_xinput.o
