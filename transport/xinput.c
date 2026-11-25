@@ -37,6 +37,11 @@ struct xone_xinput {
 	void *data_in;
 	dma_addr_t data_in_dma;
 
+	struct urb *urb_out;
+	void *data_out;
+	dma_addr_t data_out_dma;
+	spinlock_t out_lock;
+
 	u8 last[XONE_XINPUT_MIN_LEN];
 	bool has_last;
 };
@@ -124,11 +129,34 @@ resubmit:
 		dev_dbg(dev, "%s: submit failed: %d\n", __func__, err);
 }
 
+static void xone_xinput_complete_out(struct urb *urb)
+{
+	struct device *dev = urb->dev->bus ? &urb->dev->dev : NULL;
+
+	switch (urb->status) {
+	case 0:
+	case -EINPROGRESS:
+	case -EBUSY:
+		break;
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ESHUTDOWN:
+		break;
+	default:
+		if (dev)
+			dev_dbg(dev, "%s: status %d\n", __func__,
+				urb->status);
+		break;
+	}
+}
+
 static int xone_xinput_play_effect(struct input_dev *dev, void *data,
 				   struct ff_effect *effect)
 {
 	struct xone_xinput *xinput = input_get_drvdata(dev);
 	u8 packet[8] = { 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	unsigned long flags;
+	int err;
 
 	if (effect->type != FF_RUMBLE)
 		return 0;
@@ -136,10 +164,15 @@ static int xone_xinput_play_effect(struct input_dev *dev, void *data,
 	packet[3] = effect->u.rumble.strong_magnitude / 256;
 	packet[4] = effect->u.rumble.weak_magnitude / 256;
 
-	return usb_interrupt_msg(xinput->udev,
-				 usb_sndintpipe(xinput->udev,
-						xinput->ep_out->bEndpointAddress),
-				 packet, sizeof(packet), NULL, 1000);
+	/* must not sleep: force feedback callbacks may hold a spinlock */
+	spin_lock_irqsave(&xinput->out_lock, flags);
+	memcpy(xinput->data_out, packet, sizeof(packet));
+	err = usb_submit_urb(xinput->urb_out, GFP_ATOMIC);
+	spin_unlock_irqrestore(&xinput->out_lock, flags);
+
+	if (err == -EINPROGRESS || err == -EBUSY)
+		err = 0;
+	return err;
 }
 
 static void xone_xinput_init_input(struct xone_xinput *xinput)
@@ -262,6 +295,34 @@ static int xone_xinput_probe(struct usb_interface *intf,
 		return -ENOMEM;
 	}
 
+	spin_lock_init(&xinput->out_lock);
+	xinput->urb_out = usb_alloc_urb(0, GFP_KERNEL);
+	if (!xinput->urb_out) {
+		usb_free_coherent(udev, XONE_XINPUT_PKT_LEN, xinput->data_in,
+				  xinput->data_in_dma);
+		usb_free_urb(xinput->urb_in);
+		return -ENOMEM;
+	}
+
+	xinput->data_out = usb_alloc_coherent(udev, 8, GFP_KERNEL,
+					      &xinput->data_out_dma);
+	if (!xinput->data_out) {
+		usb_free_urb(xinput->urb_out);
+		usb_free_coherent(udev, XONE_XINPUT_PKT_LEN, xinput->data_in,
+				  xinput->data_in_dma);
+		usb_free_urb(xinput->urb_in);
+		return -ENOMEM;
+	}
+
+	usb_fill_int_urb(xinput->urb_out, udev,
+			 usb_sndintpipe(udev,
+					xinput->ep_out->bEndpointAddress),
+			 xinput->data_out, 8,
+			 xone_xinput_complete_out, xinput,
+			 xinput->ep_out->bInterval);
+	xinput->urb_out->transfer_dma = xinput->data_out_dma;
+	xinput->urb_out->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+
 	usb_fill_int_urb(xinput->urb_in, udev,
 			 usb_rcvintpipe(udev,
 					xinput->ep_in->bEndpointAddress),
@@ -301,9 +362,13 @@ static void xone_xinput_disconnect(struct usb_interface *intf)
 	if (!xinput)
 		return;
 
+	usb_kill_urb(xinput->urb_out);
 	usb_kill_urb(xinput->urb_in);
+	usb_free_coherent(xinput->udev, 8, xinput->data_out,
+			  xinput->data_out_dma);
 	usb_free_coherent(xinput->udev, XONE_XINPUT_PKT_LEN,
 			  xinput->data_in, xinput->data_in_dma);
+	usb_free_urb(xinput->urb_out);
 	usb_free_urb(xinput->urb_in);
 }
 
