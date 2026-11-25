@@ -1,10 +1,10 @@
 # xone-mt7612fix
 
-Fork of [dlundqvist/xone](https://github.com/dlundqvist/xone) with a fix for the **Xbox Wireless Adapter 045e:02fe (Model 1790, MT7612UN)** that fails with `init radio failed: -110`.
+基于 [dlundqvist/xone](https://github.com/dlundqvist/xone) 的修改版，修复 **Xbox 无线适配器 045e:02fe（Model 1790，MT7612UN）** 初始化时报 `init radio failed: -110` 的问题，并新增一个 XInput（Xbox 360 协议）传输驱动。
 
-## Problem
+## 问题
 
-On the 045e:02fe adapter the upstream driver writes the firmware successfully but then `xone_mt76_init_radio()` times out:
+045e:02fe 适配器固件写入成功，但 `xone_mt76_init_radio()` 超时：
 
 ```
 xone_dongle_fw_load: init radio timed out, retrying (1/3)
@@ -12,9 +12,9 @@ xone_mt76_init_radio: id=0x7613
 xone_dongle_fw_load: init radio failed: -110
 ```
 
-The MT7612 hardware needs more time than upstream allows: the USB bulk timeout is 1 s and the wait after the firmware USB reconnect is 500 ms.
+原因是 MT7612 硬件需要的等待时间比上游给的长：USB bulk 超时只有 1 秒，固件 USB 重连后的等待只有 500 毫秒。
 
-## Fix
+## 修复
 
 ```
 transport/mt76.c:
@@ -22,290 +22,221 @@ transport/mt76.c:
   msleep(500) -> msleep(2000)   (reset_firmware / load_firmware)
 ```
 
-With these two changes every `init_radio` step completes and the wireless controller connects through `xone_gip`.
+改完后 `init_radio` 每一步都能通过，无线手柄可以正常通过 `xone_gip` 连接。
 
-## Tested
+## 为什么这不是“MT7613 专用初始化”
 
-- Xbox Wireless Adapter `045e:02fe` (Model 1790, MT7612UN)
-- Xbox Series controller, wireless
-- Arch Linux, kernel 7.3.5-x64v3-xanmod-custom, DKMS build
-- `xone_dongle` + `xone_gip`; controller shows up as `/dev/input/jsN`
+xone 的 MT76 初始化本来就是 xow 的 MT7612（mt76x2）序列的内核移植：
 
----
+- `xone_mt76_init_registers()` 写入的寄存器和值与 xow `Mt76::initRegisters()` 完全一致
+- `load_cr()` 只是发送 `MT_CMD_LOAD_CR` 命令，CR 数据在固件里，驱动没有 MT7613 专用表
+- `xone_dongle_02fe.bin` 与 `xow_dongle.bin` 字节完全相同（md5 `8cecc98764d7975d4b0babe7a3b19314`）
+- 日志里的 `0x7613` 是 efuse/固件报告的值，不代表走了不同的初始化路径
 
-<p align="center">
-    <img src="logo.svg" alt="Logo" width="200">
-</p>
+真正的差异是时序：045e:02fe 上的 MT7612 需要超过 1 秒的 USB bulk 超时、超过 500 毫秒的固件重连等待。所以这个 fork 只是放宽了参数，没有把初始化序列换成“MT7612 专用”的。
 
-<p align="center">
-    <a href="https://github.com/dlundqvist/xone/releases/latest"><img src="https://img.shields.io/github/v/release/dlundqvist/xone?logo=github" alt="Release Badge"></a>
-    <a href="https://discord.gg/T3dSC3ReuS"><img src="https://img.shields.io/discord/733964971842732042?label=discord&logo=discord" alt="Discord Badge"></a>
-</p>
+## 新增：XInput（Xbox 360）传输驱动
 
-`xone` is a Linux kernel driver for Xbox One and Xbox Series X|S accessories. It serves as a modern replacement for
-`xpad`, aiming to be compatible with Microsoft's *Game Input Protocol* (GIP).
+`transport/xinput.c` 新增了一个驱动模块 `xone_xinput`，用于支持**模拟 Xbox 360 有线手柄（045e:028e）的设备**，例如 ShanWan Q34U2（2.4G 接收器会伪装成 045e:028e）。
 
-> [!WARNING]
-> As of July 2026, this project is no longer actively maintained.
->
-> If it is currently working, nothing should change for you. Support for future kernel versions (`> 7.2`) is not guaranteed. Users of rolling release distros (e.g. SteamOS, CachyOS, Arch) are strongly advised to do a full system backup prior to any kernel upgrades. Please contact dlundqvist if you would like to take over this project!
+- 协议：标准 XInput（Interrupt IN 0x81 / Interrupt OUT 0x03）
+- 支持按键、摇杆、扳机、十字键（HAT）
+- 力反馈（rumble）使用异步 URB（`usb_submit_urb` + `GFP_ATOMIC`），不会在原子上下文睡眠
+- 重复帧会跳过（数据与上一帧相同不产生事件）
+- 插上设备后由 udev 自动加载（`modules.alias`）
 
-> [!NOTE]
-> The original project is in maintenance mode, please refer to this one for updates and issues.
-> 
-> Huge thanks to medusalix for all the work and creating this driver!
+## 测试环境
 
-## Compatibility
+- Xbox 无线适配器 `045e:02fe`（Model 1790，MT7612UN）
+- Xbox Series 手柄（无线）
+- ShanWan Q34U2（USB 有线 / 2.4G 伪装成 `045e:028e`）
+- Arch Linux，内核 `7.3.6-x64v3-xanmod-custom`，DKMS 构建
+- `xone_dongle` + `xone_gip` + `xone_xinput`
 
-- [x] Wired devices (via USB)
-- [x] Wireless devices (with Xbox Wireless Dongle)
-- [ ] Bluetooth devices (check out [`xpadneo`](https://github.com/atar-axis/xpadneo))
+## xone-fix DKMS 包
 
-Installing `xone` will disable the `xpad` kernel driver. If you are still using Xbox or Xbox 360 peripherals,
-you will have to install [`xpad-noone`](https://github.com/forkymcforkface/xpad-noone) as a replacement for `xpad`.
+`packaging/PKGBUILD` 用于构建 `xone-fix` DKMS 包（替代 `xone-dkms-git`），包含 MT7612 超时修复和 XInput 驱动。
 
-## Important notes
+先生成源码 tar：
 
-This driver is still in active development. Use at your own risk!
-If you are running `xow` upgrading to `xone` is *highly recommended*!
-Always update your Xbox devices to the latest firmware version!
-**Any feedback including bug reports, suggestions or ideas is [*greatly appreciated*](https://discord.gg/J7kgN5Wm).**
+```bash
+pkgver=0.5.8.r2.g30317da
+rsync -a --exclude=.git . "/tmp/xone-fix-$pkgver/"
+tar -C /tmp -czf "xone-fix-$pkgver.tar.gz" "xone-fix-$pkgver"
+```
 
-## Features
+把 tar 放到 `packaging/PKGBUILD` 同目录，然后：
 
-- [x] Input and force feedback (rumble)
-- [x] Battery reporting (`UPower` integration)
-- [x] LED control (using `/sys/class/leds`)
-- [x] Audio capture/playback (through `ALSA`)
-- [x] Power management (suspend/resume and remote/wireless wakeup)
+```bash
+makepkg -si
+```
 
-## Supported devices
+包信息：
 
-- [x] Gamepads
-    - [x] Xbox One Controllers
-    - [x] Xbox Series X|S Controllers
-    - [x] Xbox Adaptive Controller
-    - [x] Third party controllers (PowerA, PDP, etc.)
-- [x] Headsets
-    - [x] Xbox One Chat Headset
-    - [x] Xbox One Stereo Headset (adapter or jack)
-    - [x] Xbox Wireless Headset
-    - [x] Third party wired and wireless headsets (SteelSeries, Razer, etc.)
-- [x] Guitars & Drums
-    - [x] Mad Catz Rock Band 4 Wireless Fender Stratocaster
-    - [x] Mad Catz Rock Band 4 Wireless Drum Kit
-    - [x] PDP Rock Band 4 Wireless Fender Jaguar
-- [x] Xbox One Chatpad
-- [ ] Third party racing wheels (Thrustmaster, Logitech, etc.)
+- `provides=('xone-dkms')`
+- `conflicts=('xone-dkms' 'xone-dkms-git')`
+- 安装到 `/usr/src/xone-$pkgver`，由 DKMS hook 自动构建
+- 内核升级（安装新 headers）后会自动重新编译
 
-## Releases
+## 构建与测试
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/xone.svg)](https://repology.org/project/xone/versions)
-
-Feel free to package `xone` for any Linux distribution or hardware you like.
-Any issues regarding the packaging should be reported to the respective maintainers.
-
-## Building and testing
-
-### Prerequisites
+### 依赖
 
 - Linux 6.5+
 - Linux headers
 
-### Automagically
-Build the driver with debug flags, load modules, cleanup working directory
-```shell
+### 自动
+
+```bash
 sudo make test
 ```
 
-### Manually
-Build the driver
-```shell
-make
-# with debug
-make debug
-```
+### 手动
 
-Load modules from the build directory
-```shell
-sudo make load
-```
-
-Unload all xone modules
-```shell
-# called automatically during load as well
+```bash
+make            # 构建
+make debug      # 带调试日志构建
+sudo make load  # 加载模块
 sudo make unload
-```
-
-Clean all build files
-```shell
 make clean
 ```
 
-## Installation
+## 安装
 
-### Prerequisites
+### 依赖
 
-- Linux (kernel 5.13+ and headers)
+- Linux（内核 5.13+ 与 headers）
 - DKMS
-- curl (for firmware download)
-- bsdtar (for firmware extraction)
-- For SecureBoot-enabled systems see [SecureBoot dkms guide](https://github.com/dell/dkms#secure-boot)
+- curl（下载固件）
+- bsdtar（解压固件）
+- SecureBoot 系统参见 [SecureBoot dkms guide](https://github.com/dell/dkms#secure-boot)
 
-### Guide
+### 步骤
 
-1. Unplug your Xbox devices.
+1. 拔掉 Xbox 设备
+2. 克隆仓库
+3. 安装：
+   ```bash
+   sudo make install
+   ```
+   （调试版用 `install-debug`）
+4. 下载无线适配器固件（可选，makefile 会自动安装）：
+   ```bash
+   sudo install/firmware.sh
+   ```
+   `--skip-disclaimer` 可用于脚本化。
+5. 插回 Xbox 设备
 
-2. Clone the repository:
+### 更新
 
-```
-git clone https://github.com/dlundqvist/xone
-```
-
-3. Install `xone`:
-
-```
-cd xone
-sudo make install
-```
-
-**NOTE:** You can use the `install-debug` target instead to enable debug logging.
-
-4. Download the firmware for the wireless dongle (optional, makefile automatically installs firmware):
-
-```
-sudo install/firmware.sh
-```
-> [!NOTE]
-> The `--skip-disclaimer` flag might be useful for scripting purposes.
-
-> [!TIP]
-> The `xone-dongle.fw_override=0x0000` module paramter can be used to load a different firmware file than the one selected automatically by the driver. The value is the USB PID contained in the fw file eg. `xone_dongle_02fe.bin`
-
-5. Plug in your Xbox devices.
-
-### Updating
-
-Just run the install script again after pulling the newset changes from the repository.
-
-```
+```bash
 git pull
 sudo make install
 ```
 
-Reboot is highly suggested
+建议重启。
 
-### Steam Deck/SteamOS
-#### Automatic install
-First, let's set a password
+## 兼容性
+
+- [x] 有线设备（USB）
+- [x] 无线设备（Xbox 无线适配器）
+- [ ] 蓝牙设备（请用 [`xpadneo`](https://github.com/atar-axis/xpadneo)）
+
+安装 `xone` 会禁用 `xpad`。如果还要用 Xbox 360 外设，需要装 [`xpad-noone`](https://github.com/forkymcforkface/xpad-noone) 替代 `xpad`。
+
+## 功能
+
+- [x] 输入与力反馈（震动）
+- [x] 电量上报（`UPower`）
+- [x] LED 控制（`/sys/class/leds`）
+- [x] 音频采集/播放（`ALSA`）
+- [x] 电源管理（挂起/恢复、无线唤醒）
+
+## 支持的设备
+
+- [x] 手柄
+    - [x] Xbox One 手柄
+    - [x] Xbox Series X|S 手柄
+    - [x] Xbox Adaptive Controller
+    - [x] 第三方手柄（PowerA、PDP 等）
+    - [x] 模拟 Xbox 360 有线手柄的设备（`xone_xinput`，如 ShanWan Q34U2）
+- [x] 耳机
+    - [x] Xbox One Chat Headset
+    - [x] Xbox One Stereo Headset
+    - [x] Xbox Wireless Headset
+    - [x] 第三方有线/无线耳机（SteelSeries、Razer 等）
+- [x] 吉他/鼓
+    - [x] Mad Catz Rock Band 4 Wireless Fender Stratocaster
+    - [x] Mad Catz Rock Band 4 Wireless Drum Kit
+    - [x] PDP Rock Band 4 Wireless Fender Jaguar
+- [x] Xbox One Chatpad
+- [ ] 第三方赛车方向盘（Thrustmaster、Logitech 等）
+
+## 无线配对
+
+Xbox 设备需要先与无线适配器配对。之前用 USB 线或蓝牙连接过的手柄不会自动连上适配器。
+
+配对说明见 [微软官方文档](https://support.xbox.com/en-US/help/hardware-network/controller/connect-xbox-wireless-controller-to-pc)（*Xbox Wireless* 部分）。
+
+## 内核接口
+
+### LED 控制
+
 ```bash
-# (optional, skip if you've already done this in the past)
-passwd deck
-```
-Run installation script
-```bash
-sudo sh -c "$(curl -fsSL https://raw.githubusercontent.com/dlundqvist/xone/master/install/steam-deck-install.sh)"
-```
-#### Uninstall:
-```bash
-sudo pacman -Rcns xone-dkms
-```
-Optionally, lock your deck and  remove password
-```bash
-steamos-readonly enable
-# enter current one and leave the new password blank
-passwd deck
-```
-
-### Using Xbox 360 controllers with xone
-
-`xone` doesn't support Xbox 360 controllers at all. On top of that, `xone` needs to disable `xpad` driver to work
-properly, which would normally support Xbox 360 controllers. This is due to `xpad` also trying to handle Xbox One
-controllers, which `xone` aims to support.
-
-To fix that, there is a fork of [xpad](https://github.com/paroj/xpad) driver, called [xpad-noone](https://github.com/forkymcforkface/xpad-noone) that
-has disabled support for Xbox One controllers, so it can coexist with `xone` driver. If you're using Xbox 360
-controllers, it is recommended to use it to replace the standard `xpad` driver.
-
-## Wireless pairing
-
-Xbox devices have to be paired to the wireless dongle. They will not automatically connect to the dongle if they have
-been previously plugged into a USB port or used via Bluetooth.
-
-Instructions for pairing your devices can be found
-[here](https://support.xbox.com/en-US/help/hardware-network/controller/connect-xbox-wireless-controller-to-pc)
-(see the section on *Xbox Wireless*).
-
-## Kernel interface
-
-### LED control
-
-The guide button LED can be controlled via `sysfs`:
-
-```
 echo 2 | sudo tee /sys/class/leds/gip*/mode
 echo 5 | sudo tee /sys/class/leds/gip*/brightness
 ```
 
-Changing the LED in the above way is temporary, it will only last until the device disconnects. To apply these settings
-automatically when a device connects, you can create a new `udev` rule in `/etc/udev/rules.d/50-xone.rules` with
-the following content:
+临时生效，设备断开即恢复。要自动应用，可创建 `/etc/udev/rules.d/50-xone.rules`：
 
 ```
 ACTION=="add", SUBSYSTEM=="leds", KERNEL=="gip*", ATTR{mode}="2", ATTR{brightness}="5"
 ```
 
-Replace the wildcard (`gip*`) if you want to control the LED of a specific device.
-The modes and the maximum brightness can vary from device to device.
+### 配对模式
 
-### Pairing mode
-
-The pairing mode of the dongle can be queried via `sysfs`:
-
-```
+```bash
 cat /sys/bus/usb/drivers/xone-dongle/*/pairing
+echo 1 | sudo tee /sys/bus/usb/drivers/xone-dongle/*/pairing   # 开启
+echo 0 | sudo tee /sys/bus/usb/drivers/xone-dongle/*/pairing   # 关闭
 ```
 
-You can enable (`1`) or disable (`0`) the pairing using the following command:
+### 连接数与强制关机
 
-```
-echo 1 | sudo tee /sys/bus/usb/drivers/xone-dongle/*/pairing
-```
-
-## Number of active clients and forcing poweroff
-```
-# show number of connected controllers
+```bash
+# 已连接手柄数
 cat /sys/bus/usb/drivers/xone-dongle/*/active_clients
 
-# power off selected client (possible values from 0 to 15)
+# 关闭指定客户端（0-15）
 sudo tee /sys/bus/usb/drivers/xone-dongle/*/poweroff <<< 1
 
-# power off all connected clients
+# 关闭所有
 sudo tee /sys/bus/usb/drivers/xone-dongle/*/poweroff <<< -1
 ```
 
-## Troubleshooting
+## 故障排查
 
-Uninstall the release version and install a debug build of `xone` (see installation guide).
-Run `sudo dmesg` to gather logs and check for any error messages related to `xone`.
-If `xone` is not being loaded automatically you might have to reboot your system.
+- 先卸载 release 版，装 debug 版（见安装部分）
+- `sudo dmesg` 查看 xone 相关错误
+- 如果 xone 没有自动加载，可能需要重启
 
-### Error messages
+### 常见错误
 
 - `Direct firmware load for xow_dongle.bin failed with error -2`
-    - Download the firmware for the wireless dongle (see installation guide).
+    - 下载无线适配器固件（见安装部分）
 
-### Input issues
+### 输入问题
 
-You can use `evtest` and `fftest` to check the input and force feedback functionality of your devices.
+可以用 `evtest` 和 `fftest` 检查输入与力反馈。
 
-### Other problems
+- `045e:028e` 设备（XInput）如果没被识别，确认 `xone_xinput` 已加载：
+  ```bash
+  lsmod | grep xone_xinput
+  ```
 
-Please join the [Discord server](https://discord.gg/T3dSC3ReuS) in case of any other problems.
+## 许可证
 
-## License
-
-`xone` is released under the [GNU General Public License, Version 2](LICENSE).
+`xone` 使用 [GNU General Public License, Version 2](LICENSE)。
 
 ```
 Copyright (C) 2021 Severin von Wnuck-Lipinski
@@ -315,30 +246,3 @@ modify it under the terms of the GNU General Public License
 as published by the Free Software Foundation; either version 2
 of the License, or (at your option) any later version.
 ```
-
-## Why this is not an MT7613-specific init
-
-The MT76 init sequence in xone is a kernel port of xow's MT7612 (mt76x2) sequence:
-
-- `xone_mt76_init_registers()` writes the same registers/values as xow `Mt76::initRegisters()`
-- `load_cr()` only sends `MT_CMD_LOAD_CR`; the CR data lives in firmware, there is no driver-side MT7613 table
-- `xone_dongle_02fe.bin` and `xow_dongle.bin` are byte-identical (`8cecc98764d7975d4b0babe7a3b19314`)
-- The `0x7613` value in the log is what the efuse/firmware reports, not a different init path
-
-The real difference is timing: the MT7612 in the 045e:02fe adapter needs more than 1 s for USB
-bulk transfers and more than 500 ms after the firmware USB reconnect. This fork therefore only
-relaxes those parameters; it does not replace the init sequence with an "MT7612"-specific one.
-
-## xone-fix DKMS package
-
-`packaging/PKGBUILD` builds the `xone-fix` DKMS package (replaces
-`xone-dkms-git`). It ships the MT7612 timeout fix and the XInput transport
-driver. Generate the source tarball from this tree first:
-
-```bash
-pkgver=0.5.8.r2.g30317da
-rsync -a --exclude=.git . "/tmp/xone-fix-$pkgver/"
-tar -C /tmp -czf "xone-fix-$pkgver.tar.gz" "xone-fix-$pkgver"
-```
-
-Then put the tarball next to `packaging/PKGBUILD` and run `makepkg -si`.
