@@ -36,6 +36,9 @@ struct xone_xinput {
 	struct urb *urb_in;
 	void *data_in;
 	dma_addr_t data_in_dma;
+
+	u8 last[XONE_XINPUT_MIN_LEN];
+	bool has_last;
 };
 
 static void xone_xinput_process_packet(struct xone_xinput *xinput,
@@ -104,8 +107,16 @@ static void xone_xinput_complete_in(struct urb *urb)
 		goto resubmit;
 	}
 
-	if (urb->actual_length >= XONE_XINPUT_MIN_LEN)
-		xone_xinput_process_packet(xinput, urb->transfer_buffer);
+	if (urb->actual_length >= XONE_XINPUT_MIN_LEN) {
+		const u8 *data = urb->transfer_buffer;
+
+		if (!xinput->has_last ||
+		    memcmp(xinput->last, data, XONE_XINPUT_MIN_LEN) != 0) {
+			memcpy(xinput->last, data, XONE_XINPUT_MIN_LEN);
+			xinput->has_last = true;
+			xone_xinput_process_packet(xinput, data);
+		}
+	}
 
 resubmit:
 	err = usb_submit_urb(urb, GFP_ATOMIC);
